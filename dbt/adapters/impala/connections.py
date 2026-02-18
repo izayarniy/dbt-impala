@@ -19,7 +19,6 @@ import time
 import dbt.exceptions
 
 from dbt_common.exceptions import DbtDatabaseError
-
 from dbt.adapters.contracts.connection import Credentials
 from dbt.adapters.sql import SQLConnectionManager
 from dbt.adapters.contracts.connection import AdapterRequiredConfig
