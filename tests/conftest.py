@@ -7,8 +7,10 @@ import os
 # Note: fixtures with session scope need to be local
 pytest_plugins = ["dbt.tests.fixtures.project"]
 
+
 def getenv_bool(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).lower() in ("yes", "y", "true", "1", "t")
+
 
 def pytest_addoption(parser):
     parser.addoption("--profile", action="store", default="cdh_endpoint", type=str)
@@ -24,7 +26,13 @@ def pytest_configure(config):
 
 
 @pytest.fixture(scope="session")
-def dbt_profile_target(request: object) -> dict[str, str | int | None | bool] | dict[str | Any, str | int | bool | None | Any] | dict[str, str | int | bool]:
+def dbt_profile_target(
+    request: object,
+) -> (
+    dict[str, str | int | None | bool]
+    | dict[str | Any, str | int | bool | None | Any]
+    | dict[str, str | int | bool]
+):
     profile_type = request.config.getoption("--profile")
     if profile_type == "cdh_endpoint":
         target = cdh_target()

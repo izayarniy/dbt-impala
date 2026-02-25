@@ -7,10 +7,9 @@ from dbt.tests.util import (
     write_file,
 )
 
-
 simple_model = """
 {{ config(materialized='table',
-   persist_docs={"relation": true, 
+   persist_docs={"relation": true,
                  "columns": true}
    ) }}
 
@@ -21,6 +20,7 @@ with source_data as (
     select 2 as id,
            'Anna' as first_name
 )
+
 
 select *
 from source_data
@@ -38,15 +38,13 @@ models:
         description: "My first name"
 """
 
+
 class TestColumnCommentsInModel:
     @pytest.fixture(scope="class")
     def models(self):
-        return {
-            "simple_model.sql": simple_model,
-            "schema.yml": schema
-        }
+        return {"simple_model.sql": simple_model, "schema.yml": schema}
 
     def test_persist_docs(self, project):
         # run models
-        results = run_dbt(["run"])
+        run_dbt(["run"])
         print("fruu")
