@@ -11,3 +11,7 @@ logs/
 .env
 .venv*
 test.env
+.idea/
+.tox/
+uv.lock
+.cache

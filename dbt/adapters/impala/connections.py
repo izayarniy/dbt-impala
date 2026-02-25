@@ -213,6 +213,7 @@ class ImpalaConnectionManager(SQLConnectionManager):
                     use_http_transport=credentials.use_http_transport,
                     user=credentials.username,
                     password=credentials.password,
+                    # TODO rollback
                     use_ssl=credentials.use_ssl,
                     http_path=credentials.http_path,
                     retries=credentials.retries,

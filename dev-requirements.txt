@@ -5,3 +5,4 @@ pytest
 pytest-dotenv
 pytest-xdist~=3.5
 tox~=4.11
+ipdb

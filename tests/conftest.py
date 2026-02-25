@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 import os
 
@@ -5,6 +7,8 @@ import os
 # Note: fixtures with session scope need to be local
 pytest_plugins = ["dbt.tests.fixtures.project"]
 
+def getenv_bool(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).lower() in ("yes", "y", "true", "1", "t")
 
 def pytest_addoption(parser):
     parser.addoption("--profile", action="store", default="cdh_endpoint", type=str)
@@ -20,7 +24,7 @@ def pytest_configure(config):
 
 
 @pytest.fixture(scope="session")
-def dbt_profile_target(request):
+def dbt_profile_target(request: object) -> dict[str, str | int | None | bool] | dict[str | Any, str | int | bool | None | Any] | dict[str, str | int | bool]:
     profile_type = request.config.getoption("--profile")
     if profile_type == "cdh_endpoint":
         target = cdh_target()
@@ -50,8 +54,8 @@ def dwx_target():
         "type": "impala",
         "threads": 4,
         "auth_type": "ldap",
-        "use_http_transport": True,
-        "use_ssl": True,
+        "use_http_transport": getenv_bool("IMPALA_USE_HTTP_TRANSPORT"),
+        "use_ssl": getenv_bool("IMPALA_USE_SSL"),
         "host": os.getenv("IMPALA_HOST"),
         "port": int(os.getenv("IMPALA_PORT")),
         "schema": os.getenv("IMPALA_SCHEMA") or "dbt_adapter_test",
