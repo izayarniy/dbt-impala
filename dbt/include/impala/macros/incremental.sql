@@ -60,7 +60,7 @@
 {% endmacro %}
 
 {% materialization incremental, adapter='impala' -%}
-  {% do log("FRuuuuuu fru to do", info=True) %}
+--  # TODO: for merge materialization strategy should check table format. supported only for iceberg_v2
   -- relations
   {%- set existing_relation = load_cached_relation(this) -%}
   {%- set target_relation = this.incorporate(type='table') -%}
@@ -68,17 +68,10 @@
   {%- set intermediate_relation = make_intermediate_relation(target_relation)-%}
   {%- set backup_relation_type = 'table' if existing_relation is none else existing_relation.type -%}
   {%- set backup_relation = make_backup_relation(target_relation, backup_relation_type) -%}
-
   -- configs
   {% set unique_key = config.get('unique_key') %}
-  {% set uniquekey_msg -%}
-    Impala adapter does not support 'unique_key'
-  {%- endset %}
-  {% if unique_key is not none %}
-    {% do exceptions.raise_compiler_error(uniquekey_msg) %}
-  {% endif %}
-
   {% set incremental_strategy = config.get('incremental_strategy') or 'append' %}
+  {% set incremental_predicates = config.get('predicates', none) or config.get('incremental_predicates', none) %}
   {% if incremental_strategy == None %}
     {% set incremental_strategy = 'append' %}
   {% endif %}
@@ -110,8 +103,13 @@
   {% if existing_relation is none %}
       {% set build_sql = get_create_table_as_sql(False, target_relation, sql) %}
   {% elif full_refresh_mode %}
-      {% set build_sql = get_create_table_as_sql(False, intermediate_relation, sql) %}
-      {% set need_swap = true %}
+      {% if incremental_strategy == 'merge' %}
+       {{ log("Preparing insert overwrite for full refresh mode. Supported only over iceberg v2 format." ~ incremental_strategy, info=True) }}
+       {% set build_sql = impala_built_insert_overwrite_sql(target_relation, sql)%}
+       {% set need_swap = false %}
+      {% else %}
+        {% set build_sql = get_create_table_as_sql(False, intermediate_relation, sql) %}
+      {% endif %}
   {% else %}
     {% do run_query(get_create_table_as_sql(True, temp_relation, sql)) %}
     {% do to_drop.append(temp_relation) %}
@@ -126,10 +124,18 @@
 
     {#-- Get the incremental_strategy, the macro to use for the strategy, and build the sql --#}
     {% set incremental_predicates = config.get('incremental_predicates', none) %}
-    {% set strategy_arg_dict = ({'target_relation': target_relation, 'temp_relation': temp_relation, 'unique_key': unique_key, 'dest_columns': dest_columns, 'predicates': incremental_predicates }) %}
-    {% set build_sql = get_incremental_default_sql(strategy_arg_dict) %}
-
+    {% set strategy_arg_dict = ({'target_relation': target_relation,
+                                 'temp_relation': temp_relation,
+                                 'unique_key': unique_key,
+                                 'dest_columns': dest_columns,
+                                 'incremental_predicates': incremental_predicates }) %}
+    {% if incremental_strategy == 'merge' %}
+        {% set build_sql = adapter.get_incremental_strategy_macro(context, incremental_strategy)(strategy_arg_dict) %}
+    {% else %}
+        {% set build_sql = get_incremental_default_sql(strategy_arg_dict) %}
+    {% endif %}
   {% endif %}
+
 
   {% call statement("main") %}
       {{ build_sql }}
@@ -153,6 +159,7 @@
   {{ run_hooks(post_hooks, inside_transaction=True) }}
 
   -- `COMMIT` happens here
+  -- `COMMIT` happens here
   {% do adapter.commit() %}
 
   {% for rel in to_drop %}
@@ -162,4 +169,65 @@
   {{ run_hooks(post_hooks, inside_transaction=False) }}
 
   {{ return({'relations': [target_relation]}) }}
+
 {%- endmaterialization %}
+
+{% macro impala_built_insert_overwrite_sql(target, sql_code) -%}
+    INSERT OVERWRITE TABLE  {{ target }}
+    {{ sql_code}}
+{%- endmacro %}
+
+{% macro impala__get_merge_sql(target, source, unique_key, dest_columns, incremental_predicates) -%}
+    {%- set predicates = [] if incremental_predicates is none else [] + incremental_predicates -%}
+    {%- set dest_cols_csv = get_quoted_csv(dest_columns | map(attribute="name")) -%}
+    {%- set dest_cols_csv_source = dest_cols_csv.split(', ') -%}
+    {%- set merge_update_columns = config.get('merge_update_columns') -%}
+    {%- set merge_exclude_columns = config.get('merge_exclude_columns') -%}
+    {%- set update_columns = get_merge_update_columns(merge_update_columns, merge_exclude_columns, dest_columns) -%}
+    {%- set sql_header = config.get('sql_header', none) -%}
+
+    {% if unique_key %}
+        {% if unique_key is sequence and unique_key is not mapping and unique_key is not string %}
+            {% for key in unique_key %}
+                {% set this_key_match %}
+                    DBT_INTERNAL_SOURCE.{{ key }} = DBT_INTERNAL_DEST.{{ key }}
+                {% endset %}
+                {% do predicates.append(this_key_match) %}
+            {% endfor %}
+        {% else %}
+            {% set unique_key_match %}
+                DBT_INTERNAL_SOURCE.{{ unique_key }} = DBT_INTERNAL_DEST.{{ unique_key }}
+            {% endset %}
+            {% do predicates.append(unique_key_match) %}
+        {% endif %}
+
+        {{ sql_header if sql_header is not none }}
+
+        merge into {{ target }} as DBT_INTERNAL_DEST
+            using {{ source }} as DBT_INTERNAL_SOURCE
+            on {{"(" ~ predicates | join(") and (") ~ ")"}}
+
+        {% if unique_key %}
+        when matched then update set
+            {% for column_name in update_columns -%}
+                {{ column_name | replace('"', "`") }} = DBT_INTERNAL_SOURCE.{{ column_name | replace('"', "`") }}
+                {%- if not loop.last %}, {%- endif %}
+            {%- endfor %}
+        {% endif %}
+
+        when not matched then insert
+            ({{ dest_cols_csv }})
+        values
+            ({% for dest_cols in dest_cols_csv_source -%}
+                DBT_INTERNAL_SOURCE.{{ dest_cols }}
+                {%- if not loop.last %}, {% endif %}
+            {%- endfor %})
+
+    {% else %}
+        insert into {{ target }} ({{ dest_cols_csv }})
+        (
+            select {{ dest_cols_csv }}
+            from {{ source }}
+        )
+    {% endif %}
+{%- endmacro %}
