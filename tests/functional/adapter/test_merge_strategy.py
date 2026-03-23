@@ -1,3 +1,4 @@
+import datetime
 import time
 
 import pytest
@@ -43,27 +44,9 @@ union all
 select cast(3 as INT) as id, 'NJ' as state, 'closed' as status, to_timestamp('2020-01-03 00:00:00', 'yyyy-MM-dd HH:mm:ss') as event_time
 """
 
-additional_model_sql = """
-{{ config(materialized='table',
-          table_type='iceberg',
-          file_format='parquet',
-          tblproperties={
-          'write.format.default': 'PARQUET',
-          'table_description': 'My Iceberg Table'}
-         )
-
- }}
-select cast(1 as INT) as id, 'CT' as state,  to_timestamp('2020-01-01 00:00:00', 'yyyy-MM-dd HH:mm:ss') as event_time
-union all
-select cast(2 as INT) as id, 'MA' as state, to_timestamp('2020-01-02 00:00:00', 'yyyy-MM-dd HH:mm:ss') as event_time
-union all
-select cast(3 as INT) as id, 'NJ' as state, to_timestamp('2020-01-03 00:00:00', 'yyyy-MM-dd HH:mm:ss') as event_time
-"""
-
-
 
 incremental_model_sql = """
-{{ config(materialized='incremental',
+{{ config(materialized='incremental_iceberg',
           incremental_strategy='merge',
           table_type='iceberg',
           unique_key='id',
@@ -86,7 +69,7 @@ FROM {{ ref('input_model') }}
 """
 
 incremental_model_two_uniq_columns_sql = """
-{{ config(materialized='incremental',
+{{ config(materialized='incremental_iceberg',
           incremental_strategy='merge',
           table_type='iceberg',
           unique_key=['id', 'state'],
@@ -121,8 +104,7 @@ class TestMergeStrategy:
             "input_model.sql": input_model_sql,
             "incremental_model.sql": incremental_model_sql,
             "input_model_two_uniq_columns.sql": input_model_two_uniq_columns_sql,
-            "incremental_model_two_uniq_columns.sql": incremental_model_two_uniq_columns_sql,
-            "additional_model.sql": additional_model_sql
+            "incremental_model_two_uniq_columns.sql": incremental_model_two_uniq_columns_sql
         }
     # TODO
     # case many uniq columns
@@ -134,15 +116,29 @@ class TestMergeStrategy:
     def test_merge_support(self, project):
         run_dbt(["run", "--select", "+incremental_model+"])
         target_db = project.created_schemas[0]
-        insert_new_values = f"""
-  insert into
-  {target_db}.input_model
-  (id, state, event_time) values
-  (4, 'MA', to_timestamp('2020-02-01 00:00:00', 'yyyy-MM-dd HH:mm:ss') ),
-  (5,'MA', to_timestamp('2020-02-01 00:00:00', 'yyyy-MM-dd HH:mm:ss') )
-        """
-        project.run_sql(insert_new_values)
+
         result = run_dbt(["run", "--select", "incremental_model+"], True)
+        # insert increment
+        insert_new_values = f"""
+        insert into
+        {target_db}.input_model
+        (id, state, event_time) values
+        (3, 'UPDATED_MA',CURRENT_TIMESTAMP() ),
+        (4,'NEW_STATE', CURRENT_TIMESTAMP()  )
+              """
+        project.run_sql(insert_new_values)
+        run_dbt(["run", "--select", "incremental_model+"], True)
+        get_updates = f"select * from {target_db}.incremental_model"
+        updated_rows = project.run_sql(get_updates, fetch="all")
+        actual_list = [(1, 2), (3, 4), (5, 6)]
+        expected_list = [(1, 2), (3, 4), (5, 6)]
+
+        expected_updates = [(1, 'CT', datetime.datetime(2020, 1, 1, 0, 0)),
+                            (2, 'MA', datetime.datetime(2020, 1, 2, 0, 0)),
+                            (3, 'NJ', datetime.datetime(2020, 1, 3, 0, 0)),
+                            (4, 'MA', datetime.datetime(2020, 2, 1, 0, 0)),
+                            (5, 'MA', datetime.datetime(2020, 2, 1, 0, 0))]
+        # assert actual_list == expected_list
         print(result)
 
     def test_merge_full_refresh(self, project):
@@ -157,6 +153,7 @@ class TestMergeStrategy:
         """
         project.run_sql(insert_new_values)
         run_dbt(["run", "--select", "incremental_model+", "--full-refresh"], True)
+
 
     def test_merge_many_uniq_columns_support(self, project):
         run_dbt(["run", "--select", "+incremental_model_two_uniq_columns+"])

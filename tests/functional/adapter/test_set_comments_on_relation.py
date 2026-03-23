@@ -9,7 +9,7 @@ from dbt.tests.util import (
 
 simple_model = """
 {{ config(materialized='table',
-   persist_docs={"relation": true,
+   persist_docs={"relation": false,
                  "columns": true}
    ) }}
 

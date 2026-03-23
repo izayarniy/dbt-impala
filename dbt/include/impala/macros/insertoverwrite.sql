@@ -31,7 +31,7 @@
         {% if raw_strategy == 'insert_overwrite' or raw_strategy == 'microbatch' %}
 
             insert overwrite {{ target }} partition({{ partition_cols_csv }})
-            (
+            (/
                 select {{ dest_cols_csv }}
                 from {{ source }}
             )
